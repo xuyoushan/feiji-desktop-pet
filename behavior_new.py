@@ -15,7 +15,7 @@ DEFAULT_STATE = {"affection": 50, "mood": 80, "energy": 70, "hunger": 30}
 DEFAULT_SIZE_MODE = "medium"
 
 # 肥鸡会「吃掉」的文件扩展名
-_EDIBLE_EXTS = {'.txt', '.md', '.doc', '.docx', '.pdf', '.pptx', '.jpg', '.png'}
+_EDIBLE_EXTS = {'.txt', '.md', '.doc', '.docx', '.pdf', '.pptx', '.jpg', '.png', '.xlsx'}
 
 
 def send_to_recycle_bin(filepath: str) -> bool:
@@ -236,6 +236,8 @@ class BehaviorEngine:
 
     def _check_hover_stay(self):
         """鼠标停留在宠物上时，每隔一段时间触发一个互动动画。"""
+        if self._user_interacting:
+            return
         from PyQt5.QtGui import QCursor
         cursor = QCursor.pos()
         geo = self.pet.geometry()
