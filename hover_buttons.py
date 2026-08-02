@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QWidget, QPushButton, QHBoxLayout
+from PyQt5.QtWidgets import QWidget, QPushButton, QHBoxLayout, QLabel
 from PyQt5.QtCore import Qt, QPoint, QRect, QTimer
 from PyQt5.QtGui import QFont
 
@@ -64,11 +64,28 @@ class HoverButtons(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
 
+        # 亲密度标签
+        self._aff_label = QLabel("❤️50")
+        self._aff_label.setStyleSheet("""
+            QLabel {
+                background: rgba(255,255,255,210);
+                border: 1px solid rgba(200,200,200,180);
+                border-radius: 14px;
+                font-size: 12px; color: #e55;
+                padding: 2px 8px;
+            }
+        """)
+        self._aff_label.setFixedHeight(36)
+        layout.addWidget(self._aff_label)
+
         buttons = [
             ("🍎", "喂零食", self._on_feed),
             ("🎵", "唱歌",   self._on_sing),
             ("🤚", "摸摸",   self._on_pet),
             ("💬", "对话",   self._on_chat),
+            ("✈️", "飞行",   self._on_fly),
+            ("😈", "捣乱",   self._on_mischief),
+            ("😱", "受惊",   self._on_startle),
         ]
         for icon, tip, cb in buttons:
             btn = QPushButton(icon)
@@ -102,8 +119,12 @@ class HoverButtons(QWidget):
         self.move(x, y)
         self.show()
         self.raise_()
-        # 同步按钮状态
+        # 同步按钮状态和亲密度
         self._sync_pin_style()
+        self.update_affection(int(self.pet.behavior.affection))
+
+    def update_affection(self, value: int):
+        self._aff_label.setText(f"❤️{value}")
 
     def _sync_pin_style(self):
         pinned = not self.pet.behavior.movement_enabled
@@ -131,6 +152,15 @@ class HoverButtons(QWidget):
 
     def _on_chat(self):
         self.pet.show_chat()
+
+    def _on_fly(self):
+        self.pet.fly()
+
+    def _on_mischief(self):
+        self.pet.mischief()
+
+    def _on_startle(self):
+        self.pet.startle()
 
     def _on_pin(self):
         self.pet.toggle_movement()

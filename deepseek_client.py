@@ -5,7 +5,28 @@ DeepSeek API 客户端封装
 import os
 import requests
 from llm_prompt import FEIJI_SYSTEM_PROMPT
+from app_paths import APP_ROOT
 
+
+def _load_dotenv():
+    """从 .env 文件加载环境变量（不覆盖已有值）"""
+    env_path = APP_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL   = "deepseek-chat"
@@ -44,8 +65,8 @@ def _call_api(user_text: str, history: list, force_json: bool) -> str:
     body = {
         "model": DEEPSEEK_MODEL,
         "messages": messages,
-        "max_tokens": 200,
-        "temperature": 0.85,
+        "max_tokens": 500,
+        "temperature": 0.9,
     }
     if force_json:
         body["response_format"] = {"type": "json_object"}

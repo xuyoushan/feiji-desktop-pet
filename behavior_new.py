@@ -5,12 +5,79 @@
 
 import json
 import random
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 from PyQt5.QtCore import QTimer
 from animation_new import AnimationManager, ANIM_SEQUENCES, AnimGroup, LOOP_ANIMS
 from app_paths import STATE_FILE
 DEFAULT_STATE = {"affection": 50, "mood": 80, "energy": 70, "hunger": 30}
 DEFAULT_SIZE_MODE = "medium"
+
+# 肥鸡会「吃掉」的文件扩展名
+_EDIBLE_EXTS = {'.txt', '.md', '.doc', '.docx', '.pdf', '.pptx', '.jpg', '.png'}
+
+
+def send_to_recycle_bin(filepath: str) -> bool:
+    """将文件移动到 Windows 回收站（不永久删除）。"""
+    try:
+        class SHFILEOPSTRUCTW(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wintypes.HWND),
+                ("wFunc", ctypes.c_uint),
+                ("pFrom", ctypes.c_wchar_p),
+                ("pTo", ctypes.c_wchar_p),
+                ("fFlags", wintypes.WORD),
+                ("fAnyOperationsAborted", wintypes.BOOL),
+                ("hNameMappings", ctypes.c_void_p),
+                ("lpszProgressTitle", ctypes.c_wchar_p),
+            ]
+
+        FO_DELETE = 0x0003
+        FOF_ALLOWUNDO = 0x0040
+        FOF_NOCONFIRMATION = 0x0010
+        FOF_SILENT = 0x0004
+
+        op = SHFILEOPSTRUCTW()
+        op.hwnd = None
+        op.wFunc = FO_DELETE
+        op.pFrom = str(filepath) + '\0'
+        op.pTo = None
+        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT
+        op.fAnyOperationsAborted = False
+        op.hNameMappings = None
+        op.lpszProgressTitle = None
+
+        result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+        return result == 0
+    except Exception as e:
+        print(f"[Mischief] send_to_recycle_bin failed: {e}")
+        return False
+
+
+def _find_edible_files() -> list:
+    """搜索可被肥鸡「吃掉」的文件，仅扫描指定目录（非递归）。"""
+    home = Path.home()
+
+    search_dirs = [
+        home / 'Desktop',
+        home / 'Documents',
+        home / 'Downloads',
+        Path(r'D:\Edge Download'),
+        Path(r'D:\Users\Friendly_Xu\Desktop\_'),
+    ]
+
+    files = []
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        try:
+            for f in d.iterdir():
+                if f.is_file() and f.suffix.lower() in _EDIBLE_EXTS:
+                    files.append(f)
+        except (PermissionError, OSError):
+            continue
+    return files
 
 
 def _load_state() -> dict:
@@ -103,6 +170,15 @@ class BehaviorEngine:
         self.mischief_enabled = True
         self._mischief_cooldown = 0
 
+        # 低亲密度提醒冷却（秒）
+        self._low_affection_cd = 0
+
+        # 防护标志：仅手动点击捣乱按钮时才允许吃文件
+        self._manual_mischief = False
+
+        # 鼠标停留计时
+        self._hover_timer = 0
+
         # 移动开关
         self.movement_enabled = True
 
@@ -114,6 +190,12 @@ class BehaviorEngine:
         self._update_stats()
         self._state_timer += 1
         self._mischief_cooldown = max(0, self._mischief_cooldown - 1)
+        self._low_affection_cd = max(0, self._low_affection_cd - 1)
+
+        # 亲密度低于 20 时自动提醒（5分钟冷却）
+        if self.affection < 20 and self._low_affection_cd == 0 and self._state == "idle":
+            self._low_affection_cd = 300
+            self._show_low_affection_reminder()
 
         if self._state == "walk":
             pass  # 位置由 move_tick 处理
@@ -128,6 +210,7 @@ class BehaviorEngine:
         elif self._state == "grabbed":
             pass
         else:  # idle
+            self._check_hover_stay()
             self._do_idle()
 
     def move_tick(self, dt_ms: int):
@@ -142,11 +225,33 @@ class BehaviorEngine:
         self.mood      = max(0, self.mood - 0.5)
         self.hunger    = min(100, self.hunger + 0.3)
         self.energy    = max(0, self.energy - 0.2)
-        self.affection = max(0, self.affection - 0.002)  # 极慢衰减，约10分钟-1
+        self.affection = max(0, self.affection - 0.006)  # 约每2.8分钟-1
 
     # ═══════════════════════════════════════════════════════════
     # 待机行为决策
     # ═══════════════════════════════════════════════════════════
+
+    def _check_hover_stay(self):
+        """鼠标停留在宠物上时，每隔一段时间触发一个互动动画。"""
+        from PyQt5.QtGui import QCursor
+        cursor = QCursor.pos()
+        geo = self.pet.geometry()
+        if not geo.contains(cursor):
+            self._hover_timer = 0
+            return
+
+        self._hover_timer += 1
+        if self._hover_timer >= 2:
+            self._hover_timer = 0
+            action = random.choice(["look", "happy", "like", "snicker"])
+            if action == "look":
+                self._look_at_owner()
+            elif action == "happy":
+                self._show_happy()
+            elif action == "like":
+                self._show_like()
+            elif action == "snicker":
+                self._play_snicker()
 
     def _do_idle(self):
         self._idle_timer += 1
@@ -238,6 +343,7 @@ class BehaviorEngine:
         if action == "walk":
             self._start_walk()
         elif action == "fly":
+            self.add_affection(-1)  # 自动飞行消耗
             self._start_fly()
         elif action == "happy":
             self._show_happy()
@@ -313,13 +419,29 @@ class BehaviorEngine:
         else:
             return max(new_x, self._fly_landing_start_x)
 
+    def _fly_y_at_x(self, cur_x: int) -> int:
+        """根据当前 X 在飞行起点→目标连线上的比例，计算对应 Y。"""
+        total_x = self._fly_target_x - self._fly_start_x
+        if total_x == 0:
+            return self._fly_start_y
+        ratio = (cur_x - self._fly_start_x) / total_x
+        y = int(self._fly_start_y + (self._fly_target_y - self._fly_start_y) * ratio)
+        return max(0, min(y, self.pet.screen_h - self.pet.pet_size))
+
     def _start_fly(self):
         self._state = "fly"
         pos = self.pet.get_pos()
         fly_dir = random.choice([-1, 1])
-        self._fly_target_x = max(50, min(pos.x() + fly_dir * random.randint(250, 450),
-                                         self.pet.screen_w - self.pet.pet_size - 50))
+        # 随机飞行距离：从当前距离到屏幕宽度不等
+        max_dist = self.pet.screen_w - self.pet.pet_size
+        fly_dist = random.randint(min(200, max_dist), max_dist)
+        self._fly_target_x = max(0, min(pos.x() + fly_dir * fly_dist,
+                                        self.pet.screen_w - self.pet.pet_size))
         self._fly_dir = 1 if self._fly_target_x > pos.x() else -1
+        # 随机 Y 目标，实现斜向飞行
+        self._fly_target_y = random.randint(0, self.pet.screen_h - self.pet.pet_size)
+        self._fly_start_x = pos.x()
+        self._fly_start_y = pos.y()
         # 降落起始点：目标前方 LANDING_THRESHOLD px（方向感知）
         self._fly_landing_start_x = self._fly_target_x - self._fly_dir * self.LANDING_THRESHOLD
         self._fly_phase_y_offset = 0.0
@@ -357,10 +479,8 @@ class BehaviorEngine:
         if self._state != "fly":
             return
         self._fly_phase = "land_c2"
-        # 对齐到目标 x，消除 land_c1 的累积误差
-        pos = self.pet.get_pos()
-        self.pet.set_pos(self._fly_target_x, pos.y())
-        print(f"[FLY] phase=land_c2 start pos=({self._fly_target_x},{pos.y()})")
+        # 对齐到目标 x, y，消除累积误差
+        self.pet.set_pos(self._fly_target_x, self._fly_target_y)
         self.pet.anim_mgr.play_single(AnimGroup.HOP_C2, loop=False,
                                       on_finish=self._fly_finish)
 
@@ -394,7 +514,9 @@ class BehaviorEngine:
             raw_x = pos.x() + self._fly_dir * step
             new_x = self._fly_clamp_before_target(int(raw_x))
             new_x = max(0, min(new_x, self.pet.screen_w - self.pet.pet_size))
-            self.pet.set_pos(new_x, pos.y())
+            # Y 按比例移动
+            new_y = self._fly_y_at_x(new_x)
+            self.pet.set_pos(new_x, new_y)
             # 如果已到达 landing_start_x，提前切降落
             if self._fly_reached_or_passed(new_x):
                 self._fly_enter_land_c1()
@@ -408,21 +530,22 @@ class BehaviorEngine:
             raw_x = pos.x() + self._fly_dir * step
             new_x = self._fly_clamp_before_target(int(raw_x))
             new_x = max(0, min(new_x, self.pet.screen_w - self.pet.pet_size))
-            self.pet.set_pos(new_x, pos.y())
+            # Y 按比例移动
+            new_y = self._fly_y_at_x(new_x)
+            self.pet.set_pos(new_x, new_y)
             if self._fly_reached_or_passed(new_x):
                 self._fly_enter_land_c1()
 
         elif self._fly_phase == "land_c1":
-            # 降落：继续用 _fly_dir 向目标推进，同时下沉
+            # 降落：继续用 _fly_dir 向目标推进，Y 按比例移动
             step_x = self.FLY_LIFT_SPEED * dt_ms / 1000.0
-            step_y = 15.0 * dt_ms / 1000.0
             dx_remain = abs(self._fly_target_x - pos.x())
             if dx_remain < step_x:
                 move_x = self._fly_dir * dx_remain
             else:
                 move_x = self._fly_dir * step_x
             new_x = max(0, min(int(pos.x() + move_x), self.pet.screen_w - self.pet.pet_size))
-            new_y = min(self.pet.screen_h - self.pet.pet_size, int(pos.y() + step_y))
+            new_y = self._fly_y_at_x(new_x)
             self.pet.move(new_x, new_y)
 
         elif self._fly_phase == "land_c2":
@@ -535,15 +658,33 @@ class BehaviorEngine:
     # 捣乱行为
     # ═══════════════════════════════════════════════════════════
 
-    def _do_mischief(self):
+    def _do_mischief(self, eat_file: bool = False):
+        """自动捣乱：只逃跑/生气，不吃文件。手动捣乱：eat_file=True 才吃文件。"""
         self._mischief_cooldown = 30
+        self._manual_mischief = eat_file
+
+        # 先决定捣乱动作（逃跑或生气）
         action = random.choice(["run_away", "angry"])
-        if action == "run_away" and self.movement_enabled:
-            self._run_from_mouse()
+        if action == "run_away" and not self.movement_enabled:
+            action = "angry"
+
+        # 只有手动触发才找文件吃
+        target = None
+        if eat_file:
+            edible = _find_edible_files()
+            if edible:
+                target = random.choice(edible)
+
+        if action == "run_away":
+            self._run_from_mouse(target)
         else:
             self._show_angry()
+            if target:
+                filename = target.name
+                location = str(target.parent)
+                QTimer.singleShot(2000, lambda: self._eat_file(filename, location))
 
-    def _run_from_mouse(self):
+    def _run_from_mouse(self, target=None):
         from PyQt5.QtGui import QCursor
         cursor = QCursor.pos()
         pos = self.pet.get_pos()
@@ -566,6 +707,12 @@ class BehaviorEngine:
             if steps[0] >= total:
                 self._state = "idle"
                 self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
+                # 逃跑结束后吃文件（仅手动触发）
+                if target and self._manual_mischief:
+                    filename = target.name
+                    location = str(target.parent)
+                    self._manual_mischief = False
+                    self._eat_file(filename, location)
                 return
             cur = self.pet.get_pos()
             self.pet.set_pos(cur.x() + run_dir * 8, cur.y())
@@ -585,8 +732,46 @@ class BehaviorEngine:
     # 用户触发事件
     # ═══════════════════════════════════════════════════════════
 
+    def _eat_file(self, filename: str, location: str):
+        """删除文件到回收站 + 弹对话框说明（不播放吃东西动画）"""
+        # 防护：仅手动触发时允许执行
+        if not self._manual_mischief:
+            print("[Mischief] Blocked auto _eat_file call")
+            return
+        self._manual_mischief = False
+
+        from behavior_new import send_to_recycle_bin
+        filepath = Path(location) / filename
+        if not send_to_recycle_bin(str(filepath)):
+            print(f"[Mischief] Failed to delete: {filepath}")
+            return
+
+        print(f"[Mischief] Ate file: {filename} from {location}")
+
+        self.hunger = max(0, self.hunger - 20)
+        self.mood = min(100, self.mood + 10)
+        self.add_affection(-6)  # 吃了文件，损害信任
+
+        # 短路径显示
+        short_loc = location
+        home = str(Path.home())
+        if location.startswith(home):
+            short_loc = "~" + location[len(home):]
+
+        # 弹出对话框说明
+        msg = f"啾！我吃掉了「{filename}」，从 {short_loc}。主人可以去回收站捞回来……"
+        try:
+            self.pet.show_chat()
+            self.pet.chat_win._append_msg("肥鸡", msg)
+            # 唱歌中不打断，只显示文字
+            if self.pet.chat_win._voice_enabled and not self.pet.music.is_playing():
+                self.pet.tts.speak(msg)
+        except Exception:
+            pass
+
     def on_grabbed(self):
         self._state = "grabbed"
+        self.add_affection(-2)  # 被抓起来不高兴
         # 先播放被抓起瞬间，结束后切换到扑腾循环
         def _start_flap():
             # 如果已经松手，不再启动 Grab-C 循环
@@ -608,9 +793,11 @@ class BehaviorEngine:
         self.mood = max(0, self.mood - 10)
 
     def on_feed(self):
+        if self._state != "idle":
+            return
         self.hunger    = max(0, self.hunger - 40)
         self.mood      = min(100, self.mood + 15)
-        self.add_affection(4)  # 喂食 +4
+        self.add_affection(3)  # 喂食 +3
 
         self._state = "interact"
         def _done():
@@ -621,9 +808,25 @@ class BehaviorEngine:
                 self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
         self.pet.anim_mgr.play_sequence("eat", loop=False, on_finish=_done)
 
+    def on_feed_file(self):
+        """投喂文件：吃完后播放喜欢（爱心眼）动画"""
+        if self._state != "idle":
+            return
+        self.hunger    = max(0, self.hunger - 40)
+        self.mood      = min(100, self.mood + 15)
+        self.add_affection(6)
+
+        self._state = "interact"
+        def _done():
+            self._state = "idle"
+            self._show_like()
+        self.pet.anim_mgr.play_sequence("eat", loop=False, on_finish=_done)
+
     def on_pet(self):
+        if self._state != "idle":
+            return
         self.mood = min(100, self.mood + 20)
-        self.add_affection(6)  # 摸摸 +6
+        self.add_affection(2)  # 摸摸 +2
 
         self._state = "interact"
         def _done():
@@ -635,12 +838,16 @@ class BehaviorEngine:
         self.pet.anim_mgr.play_sequence("pet", loop=False, on_finish=_done)
 
     def on_sing(self):
+        if self._state != "idle":
+            return
         self.mood = min(100, self.mood + 10)
         self.add_affection(3)  # 唱歌 +3
         self._start_sing()
 
     def on_startle(self):
         """受惊（外部突然事件）"""
+        if self._state != "idle":
+            return
         self._state = "interact"
         seq = "startle_big" if random.random() < 0.3 else "startle_small"
         def _done():
@@ -648,6 +855,26 @@ class BehaviorEngine:
             self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
         self.pet.anim_mgr.play_sequence(seq, loop=False, on_finish=_done)
         self.mood = max(0, self.mood - 5)
+        self.add_affection(-1)  # 受惊，轻微降低
+
+    def on_fly(self):
+        """手动触发飞行"""
+        if self._state != "idle":
+            return
+        if not self.movement_enabled:
+            return
+        self.add_affection(-2)  # 手动飞行消耗
+        self._start_fly()
+
+    def on_nap(self):
+        """手动触发小睡"""
+        self._take_nap()
+
+    def on_mischief(self):
+        """手动触发捣乱（会吃文件）"""
+        if self._state != "idle":
+            return
+        self._do_mischief(eat_file=True)
 
     def stop_movement(self):
         """立即中止当前走路/飞行，回到 idle。"""
@@ -664,5 +891,19 @@ class BehaviorEngine:
         _save_state(self.affection, self.mood, self.energy, self.hunger)
         try:
             self.pet.chat_win.update_affection_label(int(self.affection))
+        except Exception:
+            pass
+        try:
+            self.pet.hover_btns.update_affection(int(self.affection))
+        except Exception:
+            pass
+
+    def _show_low_affection_reminder(self):
+        """亲密度过低时自动弹出对话框提醒。"""
+        try:
+            self.pet.show_chat()
+            self.pet.chat_win._append_msg("肥鸡", "啾……主人，你是不是好久没理我了……")
+            if self.pet.chat_win._voice_enabled:
+                self.pet.tts.speak("啾……主人，你是不是好久没理我了……")
         except Exception:
             pass

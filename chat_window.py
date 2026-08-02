@@ -13,12 +13,7 @@ from deepseek_client import DeepSeekError
 from llm_parser import parse_llm_response
 from llm_mapper import apply_llm_command
 
-GREETING_TEXT = (
-    "啾……主人，我回来啦。\n"
-    "我从很远很远的云朵边，扑棱扑棱飞到你的桌面上啦。"
-    "以后我就在这里陪你，陪你工作、学习、发呆和聊天。\n"
-    "如果你想我了，就点点我。肥鸡会歪头听你说话。"
-)
+GREETING_TEXT = "啾……主人，我回来了"
 
 # 对话亲密度加成关键词
 _AFFECTION_KEYWORDS = {

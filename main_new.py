@@ -61,6 +61,7 @@ class PetWindow(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAcceptDrops(True)
 
         # 程序图标
         self._icon = _load_icon()
@@ -78,9 +79,10 @@ class PetWindow(QWidget):
         self.pet_size = SIZE_MODES[self._size_mode]
         self.setFixedSize(self.pet_size, self.pet_size)
 
-        # 计算落点（每次启动都用这个位置）
-        self._land_x = avail.x() + avail.width()  - self.pet_size - LAND_X_OFFSET
-        self._land_y = avail.y() + avail.height() - self.pet_size - LAND_Y_OFFSET
+        # 计算落点（随机位置）
+        import random as _rand
+        self._land_x = _rand.randint(0, max(0, avail.width() - self.pet_size))
+        self._land_y = _rand.randint(0, max(0, avail.height() - self.pet_size))
 
         # 入场起点（左上角外侧，稍微偏进来一点让用户能看到飞入）
         self._enter_x = avail.x() - self.pet_size + ENTRANCE_START_OFFSET_X
@@ -331,7 +333,6 @@ class PetWindow(QWidget):
 
     def _show_greeting(self):
         try:
-            self.show_chat()
             self.chat_win.show_greeting(speak=True)
         except Exception as e:
             print(f"[WARN] Greeting failed: {e}")
@@ -396,7 +397,30 @@ class PetWindow(QWidget):
     def _hide_hover_buttons(self):
         self.hover_btns.hide()
 
-    # ── 拖拽 ──────────────────────────────────────────────────
+    # ── 拖拽文件投喂 ──────────────────────────────────────────
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        if self._entering:
+            return
+        # 将拖入的文件移入回收站
+        from behavior_new import send_to_recycle_bin
+        for url in event.mimeData().urls():
+            filepath = url.toLocalFile()
+            if filepath:
+                send_to_recycle_bin(filepath)
+        self.feed_file()
+
+    # ── 拖拽（鼠标移动宠物）──────────────────────────────────
 
     def mousePressEvent(self, event):
         if self._entering:
@@ -411,10 +435,12 @@ class PetWindow(QWidget):
         if self._entering:
             event.ignore()
             return
-        if event.buttons() == Qt.LeftButton and self._drag_pos:
+        if event.buttons() & Qt.LeftButton and self._drag_pos:
             if not self._is_dragging:
                 self._is_dragging = True
                 self.behavior.on_grabbed()
+                self._hide_hover_buttons()
+                self._hover_timer.stop()
             new_pos = event.globalPos() - self._drag_pos
             new_pos.setX(max(0, min(new_pos.x(), self.screen_w - self.pet_size)))
             new_pos.setY(max(0, min(new_pos.y(), self.screen_h - self.pet_size)))
@@ -431,6 +457,7 @@ class PetWindow(QWidget):
         if event.button() == Qt.LeftButton:
             if self._is_dragging:
                 self.behavior.on_released()
+                self._hover_timer.start(100)
             self._drag_pos = None
             self._is_dragging = False
             event.accept()
@@ -460,6 +487,9 @@ class PetWindow(QWidget):
     def feed(self):
         self.behavior.on_feed()
 
+    def feed_file(self):
+        self.behavior.on_feed_file()
+
     def add_affection(self, delta: int):
         self.behavior.add_affection(delta)
 
@@ -475,14 +505,24 @@ class PetWindow(QWidget):
     def pet(self):
         self.behavior.on_pet()
 
+    def fly(self):
+        self.behavior.on_fly()
+
+    def nap(self):
+        self.behavior.on_nap()
+
+    def mischief(self):
+        self.behavior.on_mischief()
+
+    def startle(self):
+        self.behavior.on_startle()
+
     def toggle_movement(self):
         enabled = not self.behavior.movement_enabled
         self.behavior.movement_enabled = enabled
         if not enabled:
             self.behavior.stop_movement()
-            self._show_pin_hint("啾，我先乖乖待在这里。")
         else:
-            self._show_pin_hint("啾啾，我可以继续巡逻啦！")
             self.behavior._show_happy()
 
     def _show_pin_hint(self, text: str):
