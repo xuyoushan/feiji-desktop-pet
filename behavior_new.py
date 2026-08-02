@@ -810,7 +810,8 @@ class BehaviorEngine:
 
     def on_feed_file(self):
         """投喂文件：吃完后播放喜欢（爱心眼）动画"""
-        if self._state != "idle":
+        # 投喂文件不受交互锁定限制
+        if self._state in ("fly", "sleep"):
             return
         self.hunger    = max(0, self.hunger - 40)
         self.mood      = min(100, self.mood + 15)
