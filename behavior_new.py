@@ -179,6 +179,9 @@ class BehaviorEngine:
         # 鼠标停留计时
         self._hover_timer = 0
 
+        # 按钮交互锁：True=某个按钮动画正在播放，阻止其他按钮打断
+        self._user_interacting = False
+
         # 移动开关
         self.movement_enabled = True
 
@@ -487,6 +490,7 @@ class BehaviorEngine:
     def _fly_finish(self):
         self._fly_phase = "none"
         self._state = "idle"
+        self._user_interacting = False
         self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
 
     def _do_fly(self, dt_ms: int):
@@ -631,6 +635,7 @@ class BehaviorEngine:
 
         def _done():
             self._state = "idle"
+            self._user_interacting = False
             self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
             try:
                 self.pet.chat_win.show_singing_controls(False)
@@ -706,6 +711,7 @@ class BehaviorEngine:
         def _step():
             if steps[0] >= total:
                 self._state = "idle"
+                self._user_interacting = False
                 self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
                 # 逃跑结束后吃文件（仅手动触发）
                 if target and self._manual_mischief:
@@ -725,6 +731,7 @@ class BehaviorEngine:
         seq = "angry_big" if self.mood < 20 else "angry_small"
         def _done():
             self._state = "idle"
+            self._user_interacting = False
             self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
         self.pet.anim_mgr.play_sequence(seq, loop=False, on_finish=_done)
 
@@ -793,8 +800,9 @@ class BehaviorEngine:
         self.mood = max(0, self.mood - 10)
 
     def on_feed(self):
-        if self._state != "idle":
+        if self._user_interacting:
             return
+        self._user_interacting = True
         self.hunger    = max(0, self.hunger - 40)
         self.mood      = min(100, self.mood + 15)
         self.add_affection(3)  # 喂食 +3
@@ -802,6 +810,7 @@ class BehaviorEngine:
         self._state = "interact"
         def _done():
             self._state = "idle"
+            self._user_interacting = False
             if self.mood > 70:
                 self._show_happy()
             else:
@@ -810,9 +819,9 @@ class BehaviorEngine:
 
     def on_feed_file(self):
         """投喂文件：吃完后播放喜欢（爱心眼）动画"""
-        # 投喂文件不受交互锁定限制
-        if self._state in ("fly", "sleep"):
+        if self._user_interacting or self._state in ("fly", "sleep"):
             return
+        self._user_interacting = True
         self.hunger    = max(0, self.hunger - 40)
         self.mood      = min(100, self.mood + 15)
         self.add_affection(6)
@@ -820,18 +829,21 @@ class BehaviorEngine:
         self._state = "interact"
         def _done():
             self._state = "idle"
+            self._user_interacting = False
             self._show_like()
         self.pet.anim_mgr.play_sequence("eat", loop=False, on_finish=_done)
 
     def on_pet(self):
-        if self._state != "idle":
+        if self._user_interacting:
             return
+        self._user_interacting = True
         self.mood = min(100, self.mood + 20)
         self.add_affection(2)  # 摸摸 +2
 
         self._state = "interact"
         def _done():
             self._state = "idle"
+            self._user_interacting = False
             if self.affection > 80 and random.random() < 0.5:
                 self._show_like()
             else:
@@ -839,20 +851,23 @@ class BehaviorEngine:
         self.pet.anim_mgr.play_sequence("pet", loop=False, on_finish=_done)
 
     def on_sing(self):
-        if self._state != "idle":
+        if self._user_interacting:
             return
+        self._user_interacting = True
         self.mood = min(100, self.mood + 10)
         self.add_affection(3)  # 唱歌 +3
         self._start_sing()
 
     def on_startle(self):
         """受惊（外部突然事件）"""
-        if self._state != "idle":
+        if self._user_interacting:
             return
+        self._user_interacting = True
         self._state = "interact"
         seq = "startle_big" if random.random() < 0.3 else "startle_small"
         def _done():
             self._state = "idle"
+            self._user_interacting = False
             self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
         self.pet.anim_mgr.play_sequence(seq, loop=False, on_finish=_done)
         self.mood = max(0, self.mood - 5)
@@ -860,10 +875,11 @@ class BehaviorEngine:
 
     def on_fly(self):
         """手动触发飞行"""
-        if self._state != "idle":
+        if self._user_interacting:
             return
         if not self.movement_enabled:
             return
+        self._user_interacting = True
         self.add_affection(-2)  # 手动飞行消耗
         self._start_fly()
 
@@ -873,8 +889,9 @@ class BehaviorEngine:
 
     def on_mischief(self):
         """手动触发捣乱（会吃文件）"""
-        if self._state != "idle":
+        if self._user_interacting:
             return
+        self._user_interacting = True
         self._do_mischief(eat_file=True)
 
     def stop_movement(self):
@@ -883,6 +900,7 @@ class BehaviorEngine:
             self._fly_phase = "none"
             self._walk_dist_rem = 0.0
             self._state = "idle"
+            self._user_interacting = False
             self.pet.anim_mgr.play_sequence("look", loop=False,
                 on_finish=lambda: self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True))
 
