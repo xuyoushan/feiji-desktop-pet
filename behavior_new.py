@@ -176,6 +176,9 @@ class BehaviorEngine:
         # 防护标志：仅手动点击捣乱按钮时才允许吃文件
         self._manual_mischief = False
 
+        # 上次行为记录，走完后强制飞一次
+        self._last_action = None
+
         # 鼠标停留计时
         self._hover_timer = 0
 
@@ -278,7 +281,7 @@ class BehaviorEngine:
                 return
 
         # 随机行为决策（根据状态加权）
-        if self._idle_timer >= random.randint(3, 8):
+        if self._idle_timer >= random.randint(2, 5):
             self._idle_timer = 0
             self._pick_random_behavior()
 
@@ -289,14 +292,14 @@ class BehaviorEngine:
         # 精力高：更倾向活跃行为
         if self.energy > 60:
             choices += [
-                ("walk", 38),
-                ("fly", 18),
+                ("walk", 45),
+                ("fly", 28),
                 ("happy", 15 if self.mood > 60 else 5),
                 ("look", 10),
             ]
         else:
             choices += [
-                ("walk", 20),
+                ("walk", 30),
                 ("idle_anim", 20),
                 ("nap", 15),
             ]
@@ -345,6 +348,13 @@ class BehaviorEngine:
         if action in ("walk", "fly") and not self.movement_enabled:
             self._play_idle_anim()
             return
+        # 上次走完后，本次若抽到 walk 则改为 fly，交替进行
+        if self._last_action == "walk" and action == "walk":
+            action = "fly"
+        if action in ("walk", "fly"):
+            self._last_action = action
+        else:
+            self._last_action = None
         if action == "walk":
             self._start_walk()
         elif action == "fly":
@@ -389,6 +399,12 @@ class BehaviorEngine:
         if self._walk_dist_rem <= 0:
             self._last_walk_dir = self._walk_dir   # 记录本次方向
             self._state = "idle"
+            # 面朝屏幕内侧
+            pos = self.pet.get_pos()
+            if pos.x() < self.pet.screen_w // 2:
+                self.pet.face_direction(1)
+            else:
+                self.pet.face_direction(-1)
             self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
             return
 
@@ -396,11 +412,17 @@ class BehaviorEngine:
         pos = self.pet.get_pos()
         new_x = pos.x() + self._walk_dir * step
 
-        # 碰边反向
+        # 碰边：停止行走，面向屏幕内侧
         if new_x <= 0 or new_x >= self.pet.screen_w - self.pet.pet_size:
-            self._walk_dir *= -1
-            self.pet.face_direction(self._walk_dir)
-            new_x = pos.x() + self._walk_dir * step
+            self._last_walk_dir = self._walk_dir
+            self._state = "idle"
+            # 面朝屏幕内侧
+            if pos.x() < self.pet.screen_w // 2:
+                self.pet.face_direction(1)
+            else:
+                self.pet.face_direction(-1)
+            self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
+            return
 
         self.pet.set_pos(int(new_x), pos.y())
         self._walk_dist_rem -= step
@@ -493,6 +515,12 @@ class BehaviorEngine:
         self._fly_phase = "none"
         self._state = "idle"
         self._user_interacting = False
+        # 面朝屏幕内侧
+        pos = self.pet.get_pos()
+        if pos.x() < self.pet.screen_w // 2:
+            self.pet.face_direction(1)
+        else:
+            self.pet.face_direction(-1)
         self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
 
     def _do_fly(self, dt_ms: int):
