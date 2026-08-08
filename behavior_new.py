@@ -261,8 +261,18 @@ class BehaviorEngine:
             elif action == "snicker":
                 self._play_snicker()
 
+    def _face_away_from_edge(self):
+        """如果宠物靠近屏幕边缘，面朝内侧。"""
+        pos = self.pet.get_pos()
+        margin = self.pet.pet_size * 2
+        if pos.x() < margin:
+            self.pet.face_direction(1)
+        elif pos.x() > self.pet.screen_w - self.pet.pet_size - margin:
+            self.pet.face_direction(-1)
+
     def _do_idle(self):
         self._idle_timer += 1
+        self._face_away_from_edge()
 
         # 检查是否需要睡觉（精力低）
         if self.energy < 20 and random.random() < 0.3:
@@ -458,15 +468,26 @@ class BehaviorEngine:
     def _start_fly(self):
         self._state = "fly"
         pos = self.pet.get_pos()
-        fly_dir = random.choice([-1, 1])
-        # 随机飞行距离：从当前距离到屏幕宽度不等
-        max_dist = self.pet.screen_w - self.pet.pet_size
-        fly_dist = random.randint(min(200, max_dist), max_dist)
+
+        # 飞行方向：优先朝屏幕内侧
+        center_x = self.pet.screen_w // 2
+        if pos.x() < center_x:
+            fly_dir = 1   # 在左半边，朝右飞
+        else:
+            fly_dir = -1  # 在右半边，朝左飞
+
+        # 飞行距离：200 到屏幕宽度的一半，避免飞太远到对侧边框
+        max_dist = min(self.pet.screen_w // 2, 600)
+        fly_dist = random.randint(200, max(max_dist, 200))
         self._fly_target_x = max(0, min(pos.x() + fly_dir * fly_dist,
                                         self.pet.screen_w - self.pet.pet_size))
         self._fly_dir = 1 if self._fly_target_x > pos.x() else -1
-        # 随机 Y 目标，实现斜向飞行
-        self._fly_target_y = random.randint(0, self.pet.screen_h - self.pet.pet_size)
+
+        # Y 目标：限制在当前位置 ±200 范围内，避免大跨度瞬移
+        y_min = max(0, pos.y() - 200)
+        y_max = min(self.pet.screen_h - self.pet.pet_size, pos.y() + 200)
+        self._fly_target_y = random.randint(y_min, y_max)
+
         self._fly_start_x = pos.x()
         self._fly_start_y = pos.y()
         # 降落起始点：目标前方 LANDING_THRESHOLD px（方向感知）
@@ -742,6 +763,12 @@ class BehaviorEngine:
             if steps[0] >= total:
                 self._state = "idle"
                 self._user_interacting = False
+                # 面朝屏幕内侧
+                cur = self.pet.get_pos()
+                if cur.x() < self.pet.screen_w // 2:
+                    self.pet.face_direction(1)
+                else:
+                    self.pet.face_direction(-1)
                 self.pet.anim_mgr.play_single(AnimGroup.START_B, loop=True)
                 # 逃跑结束后吃文件（仅手动触发）
                 if target and self._manual_mischief:
@@ -854,7 +881,7 @@ class BehaviorEngine:
         self._user_interacting = True
         self.hunger    = max(0, self.hunger - 40)
         self.mood      = min(100, self.mood + 15)
-        self.add_affection(6)
+        self.add_affection(8)
 
         self._state = "interact"
         def _done():
